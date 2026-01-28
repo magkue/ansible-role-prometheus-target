@@ -1,0 +1,80 @@
+---
+- name: Set exporter variables
+  ansible.builtin.set_fact:
+    _target_path: >-
+      {{ (_exporter_item.path_prefix if _exporter_item.path_prefix is defined else
+         (prometheus_target_exporter_defaults[_exporter_item.id].path_prefix
+         | default(prometheus_target_exporter_target_prefix))
+         if _exporter_item.id is defined else prometheus_target_exporter_target_prefix)
+         ~
+         (_exporter_item.path if _exporter_item.path is defined
+         else prometheus_target_exporter_defaults[_exporter_item.id].path if _exporter_item.id is defined) | mandatory }}
+    _target_host: >-
+      {{ (_exporter_item.host if _exporter_item.host is defined
+         else prometheus_target_exporter_defaults[_exporter_item.id].host if _exporter_item.id is defined) | mandatory }}
+    _target_labels: >-
+      {{ (prometheus_target_exporter_defaults[_exporter_item.id].labels | default({}))
+         | combine(_exporter_item.labels | default({}))
+         if _exporter_item.id is defined else (_exporter_item.labels | default({})) }}
+
+- name: Check if target file exists
+  ansible.builtin.stat:
+    path: '{{ _target_path }}'
+  register: _target_file_stat
+  delegate_to: '{{ prometheus_target_host }}'
+
+- name: Read target file
+  ansible.builtin.slurp:
+    src: '{{ _target_path }}'
+  register: _target_file_content
+  delegate_to: '{{ prometheus_target_host }}'
+  when: _target_file_stat.stat.exists
+
+- name: Parse YAML and add host to matching target group
+  ansible.builtin.set_fact:
+    _updated_targets: >-
+      {%- set targets = (_target_file_content.content | b64decode | from_yaml) if _target_file_stat.stat.exists else [] -%}
+      {%- set targets = targets if targets is not none else [] -%}
+      {%- set ns = namespace(found=false, result=[], match=true) -%}
+      {%- for group in targets -%}
+        {%- set group_labels = group.labels | default({}) -%}
+        {%- set ns.match = true -%}
+        {%- if _target_labels | length != group_labels | length -%}
+          {%- set ns.match = false -%}
+        {%- else -%}
+          {%- for key, value in _target_labels.items() -%}
+            {%- if group_labels.get(key) != value -%}
+              {%- set ns.match = false -%}
+            {%- endif -%}
+          {%- endfor -%}
+        {%- endif -%}
+        {%- if ns.match and _target_labels | length > 0 -%}
+          {%- if _target_host not in group.targets -%}
+            {%- set _ = group.targets.append(_target_host) -%}
+          {%- endif -%}
+          {%- set ns.found = true -%}
+          {%- set _ = ns.result.append(group) -%}
+        {%- else -%}
+          {%- set filtered_targets = group.targets | reject('equalto', _target_host) | list -%}
+          {%- if filtered_targets | length > 0 -%}
+            {%- set _ = ns.result.append({'labels': group.labels, 'targets': filtered_targets}) -%}
+          {%- endif -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {%- if not ns.found and _target_labels | length > 0 -%}
+        {%- set new_group = {'labels': _target_labels, 'targets': [_target_host]} -%}
+        {%- set _ = ns.result.append(new_group) -%}
+      {%- endif -%}
+      {{ ns.result }}
+
+- name: Write updated target file
+  ansible.builtin.copy:
+    content: '{{ _updated_targets | to_nice_yaml(indent=2, width=1337) }}'
+    dest: '{{ _target_path }}'
+    mode: '0644'
+  delegate_to: '{{ prometheus_target_host }}'
+  register: _yaml_result
+
+- name: Track changes
+  ansible.builtin.set_fact:
+    _yaml_changed: '{{ _yaml_changed | default(false) or _yaml_result.changed }}'
