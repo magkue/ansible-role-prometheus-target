@@ -142,6 +142,11 @@ matches the specified labels. This strategy is useful when you have multiple
 target groups with different labels in a single file and want to automatically
 place hosts in the correct group.
 
+**Warning:** This strategy is destructive for comments and custom formatting. The
+file is parsed and regenerated on each run, which means any comments, blank lines
+between entries, or custom formatting will be lost. Only use this strategy if the
+target file is fully managed by Ansible.
+
 The `yaml` strategy:
 
 * Reads and parses the existing YAML target file
@@ -150,6 +155,7 @@ The `yaml` strategy:
 * If no matching group exists, creates a new target group with the specified labels
 * If a host exists in a group with different labels, it is moved to the matching group
 * Creates the target file if it doesn't exist
+* Hosts without labels are matched to target groups without labels
 
 Labels can be specified in `prometheus_target_exporter_defaults` and/or
 `prometheus_target_exporter`. Labels from both are **merged**, with the

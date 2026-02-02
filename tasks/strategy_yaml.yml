@@ -1,22 +1,4 @@
 ---
-- name: Set exporter variables
-  ansible.builtin.set_fact:
-    _target_path: >-
-      {{ (_exporter_item.path_prefix if _exporter_item.path_prefix is defined else
-         (prometheus_target_exporter_defaults[_exporter_item.id].path_prefix
-         | default(prometheus_target_exporter_target_prefix))
-         if _exporter_item.id is defined else prometheus_target_exporter_target_prefix)
-         ~
-         (_exporter_item.path if _exporter_item.path is defined
-         else prometheus_target_exporter_defaults[_exporter_item.id].path if _exporter_item.id is defined) | mandatory }}
-    _target_host: >-
-      {{ (_exporter_item.host if _exporter_item.host is defined
-         else prometheus_target_exporter_defaults[_exporter_item.id].host if _exporter_item.id is defined) | mandatory }}
-    _target_labels: >-
-      {{ (prometheus_target_exporter_defaults[_exporter_item.id].labels | default({}))
-         | combine(_exporter_item.labels | default({}))
-         if _exporter_item.id is defined else (_exporter_item.labels | default({})) }}
-
 - name: Check if target file exists
   ansible.builtin.stat:
     path: '{{ _target_path }}'
@@ -48,7 +30,7 @@
             {%- endif -%}
           {%- endfor -%}
         {%- endif -%}
-        {%- if ns.match and _target_labels | length > 0 -%}
+        {%- if ns.match -%}
           {%- if _target_host not in group.targets -%}
             {%- set _ = group.targets.append(_target_host) -%}
           {%- endif -%}
@@ -61,8 +43,12 @@
           {%- endif -%}
         {%- endif -%}
       {%- endfor -%}
-      {%- if not ns.found and _target_labels | length > 0 -%}
-        {%- set new_group = {'labels': _target_labels, 'targets': [_target_host]} -%}
+      {%- if not ns.found -%}
+        {%- if _target_labels | length > 0 -%}
+          {%- set new_group = {'labels': _target_labels, 'targets': [_target_host]} -%}
+        {%- else -%}
+          {%- set new_group = {'targets': [_target_host]} -%}
+        {%- endif -%}
         {%- set _ = ns.result.append(new_group) -%}
       {%- endif -%}
       {{ ns.result }}
@@ -73,8 +59,9 @@
     dest: '{{ _target_path }}'
     mode: '0644'
   delegate_to: '{{ prometheus_target_host }}'
+  become: true
   register: _yaml_result
 
 - name: Track changes
   ansible.builtin.set_fact:
-    _yaml_changed: '{{ _yaml_changed | default(false) or _yaml_result.changed }}'
+    changed: '{{ changed | default(false) or _yaml_result.changed }}'
